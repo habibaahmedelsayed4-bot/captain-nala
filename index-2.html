@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Unblock Arrows - 110 Levels</title>
+<!-- Yandex Games SDK -->
+<script src="https://yandex.ru/games/sdk/v2"></script>
+<style>
+  * {
+    box-sizing: border-box; -webkit-tap-highlight-color: transparent;
+    user-select: none; -webkit-user-select: none; -moz-user-select: none; -ms-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #141414;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    overflow: hidden; touch-action: manipulation;
+  }
+  #app {
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+    width: 100%; height: 100%; position: relative;
+  }
+  #topbar {
+    width: 100%; display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px 8px 20px; z-index: 5;
+  }
+  #levelTxt { color: #eee; font-size: 18px; font-weight: bold; }
+  #lives { display: flex; gap: 5px; font-size: 22px; }
+  #restartBtn {
+    background: #2a2a2a; border: 1px solid #3d3d3d; color: #ddd;
+    width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer;
+  }
+  #restartBtn:active { background: #3a3a3a; }
+  #boardWrap {
+    flex: 1; width: 100%; display: flex; align-items: center; justify-content: center;
+    padding: 10px; position: relative;
+  }
+  #board {
+    display: grid; gap: 5px; background: #1b1b1b; padding: 10px; border-radius: 20px;
+    box-shadow: 0 0 0 1px #262626, 0 10px 30px rgba(0,0,0,.5);
+  }
+  .cell { width: 100%; height: 100%; position: relative; }
+  .arrow {
+    position: absolute; inset: 0; border-radius: 8px;
+    background: #d9d9d9;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: transform .12s ease, opacity .25s ease, background .15s ease;
+    box-shadow: 0 2px 0 #8a8a8a;
+  }
+  .arrow svg { width: 58%; height: 58%; pointer-events: none; }
+  .arrow.shake { animation: shake .35s ease; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    20% { transform: translateX(-6px); }
+    40% { transform: translateX(6px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(4px); }
+  }
+  .arrow.leaving { transition: transform .35s cubic-bezier(.4,0,.6,1), opacity .35s ease; opacity: 0; }
+  #credit {
+    color: rgba(255,255,255,.35); font-size: 12px; margin-bottom: 10px; direction: ltr; letter-spacing: .5px;
+  }
+  #overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,.9);
+    display: none; align-items: center; justify-content: center; flex-direction: column; z-index: 20;
+    color: #eee; text-align: center; padding: 20px;
+  }
+  #overlay h2 { font-size: 24px; margin-bottom: 6px; font-weight: 600; }
+  #overlay p { opacity: .6; margin-bottom: 22px; font-size: 14px; }
+  .btn {
+    background: #eaeaea; color: #141414; border: none;
+    padding: 13px 34px; border-radius: 30px; font-size: 16px; font-weight: bold;
+    cursor: pointer;
+  }
+  .btn:active { transform: translateY(2px); }
+  .particle { position: absolute; border-radius: 50%; pointer-events: none; z-index: 15; background: #bbb; }
+  img, svg { -webkit-user-drag: none; user-drag: none; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div id="restartBtn" title="Restart">↻</div>
+    <div id="levelTxt">Level 1 / 110</div>
+    <div id="lives">🤍🤍🤍</div>
+  </div>
+  <div id="boardWrap"><div id="board"></div></div>
+  <div id="credit">A game by Bebo</div>
+
+  <div id="overlay">
+    <h2 id="ovTitle">Great!</h2>
+    <p id="ovMsg"></p>
+    <button class="btn" id="ovBtn">Next Level</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  // ---------- PREVENT TEXT SELECTION / CONTEXT MENU (Platform requirement 1.6.2.7) ----------
+  // Blocks the browser context menu and text/field selection anywhere inside the game
+  // (right-click on desktop, long-press on touch, drag-select).
+  document.addEventListener('contextmenu', function(e){ e.preventDefault(); }, false);
+  document.addEventListener('selectstart', function(e){ e.preventDefault(); }, false);
+  document.addEventListener('dragstart', function(e){ e.preventDefault(); }, false);
+
+  // ---------- LOCALIZATION LANGUAGE (must exist before the SDK block below uses it) ----------
+  let LANG = 'en';
+
+  // ---------- YANDEX SDK INTEGRATION ----------
+  let ysdk = null;
+  let sdkReadyCalled = false;
+
+  function callLoadingReady(){
+    // Tells Yandex the game has finished loading and the first screen is visible.
+    // Must be called once, and only after the game is actually playable.
+    if (sdkReadyCalled) return;
+    sdkReadyCalled = true;
+    if (ysdk && ysdk.features && ysdk.features.LoadingAPI && ysdk.features.LoadingAPI.ready) {
+      ysdk.features.LoadingAPI.ready();
+    }
+    // Signal readiness right after the browser has actually painted the first frame,
+    // not just after the JS finished executing (fixes "GameReady API works incorrectly").
+  }
+
+  function startGame(){
+    updateLives();
+    buildGrid();
+    // Wait two animation frames so the first level is guaranteed to be rendered
+    // and painted on screen before we tell Yandex the game is ready.
+    requestAnimationFrame(()=> requestAnimationFrame(callLoadingReady));
+  }
+
+  // We must know the player's language BEFORE we build the first screen,
+  // otherwise the UI could briefly flash and then switch language.
+  let sdkSettled = false;
+  function settleSdkAndStart(){
+    if (sdkSettled) return;
+    sdkSettled = true;
+    document.documentElement.lang = LANG;
+    refreshTextsAfterLangReady();
+    startGame();
+  }
+
+  // (SDK is actually started at the very bottom of this script, once every
+  // variable and DOM reference it needs already exists — see "START THE GAME".)
+
+  // ---------- TEXT (English only) ----------
+  const I18N = {
+    en: {
+      restartTitle: 'Restart',
+      level: (lvl, total) => `Level ${lvl} / ${total}`,
+      great: 'Great! ✓',
+      completedLevel: (lvl) => `Completed Level ${lvl}`,
+      nextLevel: 'Next Level',
+      masterChampion: '🎉 Master Champion!',
+      completedAll: (total) => `You completed all ${total} Levels!`,
+      playAgain: 'Play Again',
+      gameOver: 'Game Over',
+      outOfAttempts: 'Out of attempts',
+      tryAgain: 'Try Again'
+    }
+  };
+  function t(key, ...args){
+    const dict = I18N[LANG] || I18N.en;
+    const entry = dict[key];
+    return typeof entry === 'function' ? entry(...args) : entry;
+  }
+  // Re-applies translated text to whatever is currently on screen (called once the
+  // player's language is known, and every time the UI text is rebuilt).
+  function refreshTexts(){
+    restartBtn.title = t('restartTitle');
+    levelTxt.textContent = t('level', level, TOTAL_LEVELS);
+  }
+  // Called once the player's language has been resolved, before the board is first built.
+  function refreshTextsAfterLangReady(){
+    restartBtn.title = t('restartTitle');
+  }
+
+  // The ad can report back more than once (for example onError AND onClose, or a
+  // double tap on the button), which used to run the "next level" code twice and
+  // skip a level. This makes sure the callback runs exactly once per ad.
+  let adBusy = false;
+  function showFullscreenAd(onComplete) {
+    if (adBusy) return;
+    adBusy = true;
+    let done = false;
+    let safety = null;
+    const finish = function(){
+      if (done) return;
+      done = true;
+      adBusy = false;
+      clearTimeout(safety);
+      if (actx && actx.state === 'suspended') actx.resume();
+      if (onComplete) onComplete();
+    };
+    if (ysdk && ysdk.adv) {
+      // If the SDK never answers, don't leave the player stuck.
+      safety = setTimeout(finish, 35000);
+      try {
+        ysdk.adv.showFullscreenAdv({
+          callbacks: {
+            onClose: function(wasShown) { finish(); },
+            onError: function(error) { finish(); },
+            onOpen: function() {
+              if (actx && actx.state === 'running') actx.suspend();
+            }
+          }
+        });
+      } catch(e) {
+        finish();
+      }
+    } else {
+      finish();
+    }
+  }
+
+  // ---------- GAME CONSTANTS & VARS ----------
+  const DIRS = {
+    up:    {dr:-1, dc:0,  rot:-90},
+    down:  {dr:1,  dc:0,  rot:90},
+    left:  {dr:0,  dc:-1, rot:180},
+    right: {dr:0,  dc:1,  rot:0}
+  };
+  const DIR_KEYS = Object.keys(DIRS);
+  const TOTAL_LEVELS = 110;
+
+  // Restore the saved level or start from level 1
+  let savedLevel = parseInt(localStorage.getItem('unblock_arrows_level')) || 1;
+  let level = savedLevel > TOTAL_LEVELS ? 1 : savedLevel;
+  let lives = 3;
+
+  let gridSize = 3;
+  let grid = [];
+  let boardEl = document.getElementById('board');
+  let livesEl = document.getElementById('lives');
+  let levelTxt = document.getElementById('levelTxt');
+  let overlay = document.getElementById('overlay');
+  let ovTitle = document.getElementById('ovTitle');
+  let ovMsg = document.getElementById('ovMsg');
+  let ovBtn = document.getElementById('ovBtn');
+  let restartBtn = document.getElementById('restartBtn');
+
+  // ---------- AUDIO ----------
+  let actx;
+  function ac(){ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); return actx; }
+  function tone(freq, dur, type, vol){
+    try{
+      const c = ac();
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.type = type||'sine';
+      o.frequency.value = freq;
+      g.gain.value = vol||0.12;
+      o.connect(g); g.connect(c.destination);
+      o.start();
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + dur);
+      o.stop(c.currentTime + dur);
+    }catch(e){}
+  }
+  function sfxOk(){ tone(500, .14, 'sine', .12); }
+  function sfxBad(){ tone(140, .22, 'sawtooth', .14); }
+  function sfxWin(){ [523,659,784].forEach((f,i)=> setTimeout(()=>tone(f,.2,'sine',.12), i*90)); }
+  function sfxLose(){ [260,200,150].forEach((f,i)=> setTimeout(()=>tone(f,.25,'sawtooth',.14), i*120)); }
+
+  // ---------- LEVEL GENERATION ----------
+  function inBounds(r,c,n){ return r>=0 && r<n && c>=0 && c<n; }
+
+  function pathClear(occupied, r, c, dir, n){
+    let {dr,dc} = DIRS[dir];
+    let rr = r+dr, cc = c+dc;
+    while(inBounds(rr,cc,n)){
+      if(occupied[rr][cc]) return false;
+      rr += dr; cc += dc;
+    }
+    return true;
+  }
+
+  function generateLevel(n, count){
+    const occupied = Array.from({length:n}, ()=> Array(n).fill(false));
+    const placements = [];
+    const emptyCells = [];
+    for(let r=0;r<n;r++) for(let c=0;c<n;c++) emptyCells.push([r,c]);
+
+    let attempts = 0;
+    while(placements.length < count && attempts < count*50){
+      attempts++;
+      const cell = emptyCells[Math.floor(Math.random()*emptyCells.length)];
+      const [r,c] = cell;
+      if(occupied[r][c]) continue;
+      const shuffledDirs = [...DIR_KEYS].sort(()=>Math.random()-.5);
+      let placedDir = null;
+      for(const d of shuffledDirs){
+        if(pathClear(occupied, r, c, d, n)){ placedDir = d; break; }
+      }
+      if(!placedDir) continue;
+      occupied[r][c] = true;
+      placements.push({r, c, dir: placedDir});
+    }
+    return placements;
+  }
+
+  let remaining = 0;
+
+  function buildGrid(){
+    // Auto-save the current level
+    localStorage.setItem('unblock_arrows_level', level);
+
+    boardEl.innerHTML = '';
+    levelTxt.textContent = t('level', level, TOTAL_LEVELS);
+    
+    if (level <= 10) gridSize = 3;
+    else if (level <= 30) gridSize = 4;
+    else if (level <= 60) gridSize = 5;
+    else if (level <= 90) gridSize = 6;
+    else gridSize = 7;
+
+    grid = Array.from({length:gridSize}, ()=> Array(gridSize).fill(null));
+
+    const minArrows = Math.min(3 + Math.floor(level * 0.25), gridSize * gridSize - 2);
+    const count = Math.max(minArrows, 3);
+    
+    const placements = generateLevel(gridSize, count);
+
+    boardEl.style.gridTemplateColumns = `repeat(${gridSize}, 1fr)`;
+    boardEl.style.gridTemplateRows = `repeat(${gridSize}, 1fr)`;
+    // The board used to be capped at 440px even on large desktop screens, so it looked tiny
+    // in the middle of empty black space. Now it scales with the screen (up to 900px) and stays mobile-friendly.
+    const smallerSide = Math.min(window.innerWidth, window.innerHeight);
+    const wrapSize = Math.min(smallerSide * 0.85, 900);
+    boardEl.style.width = wrapSize + 'px';
+    boardEl.style.height = wrapSize + 'px';
+
+    for(let r=0;r<gridSize;r++){
+      for(let c=0;c<gridSize;c++){
+        const cellEl = document.createElement('div');
+        cellEl.className = 'cell';
+        boardEl.appendChild(cellEl);
+      }
+    }
+
+    placements.forEach((p)=>{
+      const cellEl = boardEl.children[p.r*gridSize + p.c];
+      const arrowEl = document.createElement('div');
+      arrowEl.className = 'arrow';
+      arrowEl.innerHTML = `<svg viewBox="0 0 24 24" style="transform:rotate(${DIRS[p.dir].rot}deg)">
+        <path d="M4 12h13M13 6l6 6-6 6" stroke="#141414" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>`;
+      cellEl.appendChild(arrowEl);
+      grid[p.r][p.c] = { dir: p.dir, el: arrowEl, r: p.r, c: p.c };
+      arrowEl.addEventListener('click', ()=> onTap(grid[p.r][p.c]));
+    });
+
+    remaining = placements.length;
+  }
+
+  function onTap(arrow){
+    if(!arrow || overlay.style.display === 'flex') return;
+    const {r, c, dir} = arrow;
+    const n = gridSize;
+    const occupied = Array.from({length:n}, ()=> Array(n).fill(false));
+    for(let rr=0; rr<n; rr++) for(let cc=0; cc<n; cc++) if(grid[rr][cc]) occupied[rr][cc]=true;
+
+    if(pathClear(occupied, r, c, dir, n)){
+      sfxOk();
+      launchParticles(arrow.el);
+      const {dr,dc} = DIRS[dir];
+      arrow.el.classList.add('leaving');
+      arrow.el.style.transform = `translate(${dc*260}px, ${dr*260}px) scale(.4)`;
+      setTimeout(()=>{ arrow.el.remove(); }, 350);
+      grid[r][c] = null;
+      remaining--;
+      if(remaining <= 0){
+        setTimeout(showWin, 400);
+      }
+    } else {
+      lives--;
+      updateLives();
+      sfxBad();
+      arrow.el.classList.remove('shake'); void arrow.el.offsetWidth; arrow.el.classList.add('shake');
+      if(lives <= 0){
+        setTimeout(showLose, 400);
+      }
+    }
+  }
+
+  function updateLives(){
+    livesEl.textContent = '🤍'.repeat(Math.max(lives,0)) + '🖤'.repeat(3-Math.max(lives,0));
+  }
+
+  function launchParticles(el){
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width/2, cy = rect.top + rect.height/2;
+    for(let i=0;i<8;i++){
+      const p = document.createElement('div');
+      p.className = 'particle';
+      const size = 3 + Math.random()*4;
+      p.style.width = size+'px'; p.style.height = size+'px';
+      p.style.left = cx+'px'; p.style.top = cy+'px';
+      document.body.appendChild(p);
+      const ang = Math.random()*Math.PI*2, dist = 25+Math.random()*35;
+      p.animate([
+        { transform:'translate(0,0)', opacity:.8 },
+        { transform:`translate(${Math.cos(ang)*dist}px, ${Math.sin(ang)*dist}px)`, opacity:0 }
+      ], { duration: 420, easing:'ease-out' });
+      setTimeout(()=>p.remove(), 430);
+    }
+  }
+
+  function showWin(){
+    sfxWin();
+    if(level >= TOTAL_LEVELS){
+      ovTitle.textContent = t('masterChampion');
+      ovMsg.textContent = t('completedAll', TOTAL_LEVELS);
+      ovBtn.textContent = t('playAgain');
+      overlay.style.display = 'flex';
+      ovBtn.onclick = ()=>{
+        showFullscreenAd(() => {
+          overlay.style.display = 'none';
+          level = 1;
+          lives = 3;
+          updateLives();
+          buildGrid();
+        });
+      };
+    } else {
+      ovTitle.textContent = t('great');
+      ovMsg.textContent = t('completedLevel', level);
+      ovBtn.textContent = t('nextLevel');
+      overlay.style.display = 'flex';
+      ovBtn.onclick = ()=>{
+        showFullscreenAd(() => {
+          overlay.style.display = 'none';
+          level++;
+          lives = 3;
+          updateLives();
+          buildGrid();
+        });
+      };
+    }
+  }
+
+  function showLose(){
+    sfxLose();
+    ovTitle.textContent = t('gameOver');
+    ovMsg.textContent = t('outOfAttempts');
+    ovBtn.textContent = t('tryAgain');
+    overlay.style.display = 'flex';
+    ovBtn.onclick = ()=>{
+      showFullscreenAd(() => {
+        overlay.style.display = 'none';
+        lives = 3;
+        updateLives();
+        buildGrid();
+      });
+    };
+  }
+
+  function restartLevel(){
+    lives = 3;
+    updateLives();
+    overlay.style.display = 'none';
+    buildGrid();
+  }
+
+  restartBtn.addEventListener('click', restartLevel);
+  window.addEventListener('resize', buildGrid);
+
+  // ---------- START THE GAME ----------
+  // Everything the game needs (DOM refs, functions) is defined by now, so it's
+  // safe to let the SDK trigger the actual start.
+  if (typeof YaGames !== 'undefined') {
+    YaGames.init().then(_sdk => {
+      ysdk = _sdk;
+      // The game is English only, so the language is always 'en'.
+      LANG = 'en';
+      settleSdkAndStart();
+    }).catch(function(){
+      settleSdkAndStart();
+    });
+    // Safety net: if the SDK takes too long to resolve, don't block the game forever.
+    setTimeout(settleSdkAndStart, 3000);
+  } else {
+    settleSdkAndStart();
+  }
+})();
+</script>
+</body>
+</html>
